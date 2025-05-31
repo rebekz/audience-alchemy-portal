@@ -4,10 +4,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { ArrowLeft, BarChart3 } from 'lucide-react';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { ArrowLeft, BarChart3, Users, Filter } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import AudienceCharts from '@/components/audience/AudienceCharts';
 import AudienceRules from '@/components/audience/AudienceRules';
+import AudienceSegments from '@/components/audience/AudienceSegments';
 
 interface AudienceBuilderProps {
   onSave: (audienceData: any) => void;
@@ -18,6 +20,7 @@ const AudienceBuilder = ({ onSave, onCancel }: AudienceBuilderProps) => {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [rules, setRules] = useState<any[]>([]);
+  const [segments, setSegments] = useState<any[]>([]);
   const [audienceSize, setAudienceSize] = useState(0);
   const [isCalculating, setIsCalculating] = useState(false);
   const { toast } = useToast();
@@ -27,19 +30,24 @@ const AudienceBuilder = ({ onSave, onCancel }: AudienceBuilderProps) => {
     // Simulate API call for audience sizing
     await new Promise(resolve => setTimeout(resolve, 1000));
     const baseSize = 100000;
-    const reductionFactor = rules.length * 0.3;
-    const newSize = Math.max(1000, Math.floor(baseSize * (1 - reductionFactor) + Math.random() * 20000));
+    const rulesReduction = rules.length * 0.3;
+    const segmentsImpact = segments.reduce((acc, segment) => {
+      const segmentRulesCount = segment.rules?.length || 0;
+      return acc + (segment.type === 'exclude' ? segmentRulesCount * 0.2 : segmentRulesCount * 0.1);
+    }, 0);
+    const totalReduction = rulesReduction + segmentsImpact;
+    const newSize = Math.max(1000, Math.floor(baseSize * (1 - totalReduction) + Math.random() * 20000));
     setAudienceSize(newSize);
     setIsCalculating(false);
   };
 
   useEffect(() => {
-    if (rules.length > 0) {
+    if (rules.length > 0 || segments.length > 0) {
       calculateAudienceSize();
     } else {
       setAudienceSize(0);
     }
-  }, [rules]);
+  }, [rules, segments]);
 
   const handleSave = () => {
     if (!name.trim()) {
@@ -55,6 +63,7 @@ const AudienceBuilder = ({ onSave, onCancel }: AudienceBuilderProps) => {
       name,
       description,
       rules,
+      segments,
       size: audienceSize
     });
 
@@ -124,8 +133,27 @@ const AudienceBuilder = ({ onSave, onCancel }: AudienceBuilderProps) => {
               </CardContent>
             </Card>
 
-            {/* Audience Rules */}
-            <AudienceRules rules={rules} onRulesChange={setRules} />
+            {/* Tabs for Rules and Segments */}
+            <Tabs defaultValue="rules" className="w-full">
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="rules" className="flex items-center gap-2">
+                  <Filter className="h-4 w-4" />
+                  Base Rules
+                </TabsTrigger>
+                <TabsTrigger value="segments" className="flex items-center gap-2">
+                  <Users className="h-4 w-4" />
+                  Segments
+                </TabsTrigger>
+              </TabsList>
+              
+              <TabsContent value="rules" className="mt-6">
+                <AudienceRules rules={rules} onRulesChange={setRules} />
+              </TabsContent>
+              
+              <TabsContent value="segments" className="mt-6">
+                <AudienceSegments segments={segments} onSegmentsChange={setSegments} />
+              </TabsContent>
+            </Tabs>
           </div>
 
           {/* Right Column - Live Charts */}
@@ -137,13 +165,44 @@ const AudienceBuilder = ({ onSave, onCancel }: AudienceBuilderProps) => {
                   Live Audience Insights
                 </CardTitle>
                 <CardDescription>
-                  Real-time charts update as you modify criteria
+                  Real-time charts update as you modify criteria and segments
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <AudienceCharts audienceSize={audienceSize} isLoading={isCalculating} />
               </CardContent>
             </Card>
+
+            {/* Segments Summary */}
+            {segments.length > 0 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center">
+                    <Users className="h-5 w-5 mr-2" />
+                    Segments Summary
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    {segments.map((segment) => (
+                      <div key={segment.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                        <div>
+                          <p className="font-medium text-sm">{segment.name}</p>
+                          <p className="text-xs text-gray-600">{segment.rules?.length || 0} rules</p>
+                        </div>
+                        <span className={`px-2 py-1 text-xs rounded-full ${
+                          segment.type === 'include' 
+                            ? 'bg-green-100 text-green-800' 
+                            : 'bg-red-100 text-red-800'
+                        }`}>
+                          {segment.type}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
           </div>
         </div>
       </main>
