@@ -157,6 +157,25 @@ const AudienceRules = ({ rules, onRulesChange }: AudienceRulesProps) => {
               </div>
             </div>
           )}
+
+          {rule.type === 'Application' && (
+            <div>
+              <Label className="text-sm font-medium text-gray-900 mb-2 block">Application</Label>
+              <Select
+                value={rule.value}
+                onValueChange={(value) => updateRule(rule.id, 'value', value)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select application..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="whatsapp">WhatsApp</SelectItem>
+                  <SelectItem value="instagram">Instagram</SelectItem>
+                  <SelectItem value="imessage">iMessage</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
         </CardContent>
       </Card>
     );
@@ -209,6 +228,14 @@ const AudienceRules = ({ rules, onRulesChange }: AudienceRulesProps) => {
         >
           <Plus className="h-4 w-4" />
           Add Interest Rule
+        </Button>
+        <Button
+          variant="outline"
+          onClick={() => addRule('Application')}
+          className="flex items-center gap-2"
+        >
+          <Plus className="h-4 w-4" />
+          Add Application Rule
         </Button>
       </div>
     </div>

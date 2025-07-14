@@ -1,15 +1,17 @@
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ArrowLeft, BarChart3, Users, Filter } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import AudienceCharts from '@/components/audience/AudienceCharts';
 import AudienceRules from '@/components/audience/AudienceRules';
 import AudienceSegments from '@/components/audience/AudienceSegments';
+import audienceService from '@/services/audienceService';
 
 interface AudienceBuilderProps {
   onSave: (audienceData: any) => void;
@@ -23,31 +25,188 @@ const AudienceBuilder = ({ onSave, onCancel }: AudienceBuilderProps) => {
   const [segments, setSegments] = useState<any[]>([]);
   const [audienceSize, setAudienceSize] = useState(0);
   const [isCalculating, setIsCalculating] = useState(false);
+  const [baseAudienceId, setBaseAudienceId] = useState('');
+  const [availableAudiences, setAvailableAudiences] = useState<any[]>([]);
+  const [isLoadingAudiences, setIsLoadingAudiences] = useState(true);
   const { toast } = useToast();
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Load available audiences on mount
+  useEffect(() => {
+    const loadAudiences = async () => {
+      try {
+        setIsLoadingAudiences(true);
+        const audiences = await audienceService.getAllAudiences();
+        setAvailableAudiences(audiences);
+      } catch (error) {
+        console.error('Failed to load audiences:', error);
+        toast({
+          title: "Error",
+          description: "Failed to load available audiences",
+          variant: "destructive",
+        });
+      } finally {
+        setIsLoadingAudiences(false);
+      }
+    };
+    loadAudiences();
+  }, []);
+
+  // Convert UI rules to API filter format
+  const convertRulesToFilters = (rules: any[]) => {
+    const filters: any[] = [];
+    
+    rules.forEach((rule) => {
+      if (rule.value) {
+        // Map UI rule types to API dimensions
+        let dimension = '';
+        let operator = 'equals';
+        let values = [rule.value];
+        
+        // Handle different rule types
+        switch (rule.type) {
+          case 'Age':
+            dimension = 'age_group';
+            break;
+          case 'Gender':
+            dimension = 'gender';
+            break;
+          case 'Interest Interaction':
+            dimension = 'interest_category';
+            // For Interest Interaction, the value is the interest type
+            values = [rule.value];
+            break;
+          case 'Application':
+            dimension = 'application';
+            // Map application values to proper case
+            if (rule.value === 'whatsapp') values = ['WhatsApp'];
+            else if (rule.value === 'instagram') values = ['Instagram'];
+            else if (rule.value === 'imessage') values = ['iMessage'];
+            else values = [rule.value];
+            break;
+          case 'Device':
+            dimension = 'device_type';
+            break;
+          case 'Location':
+            dimension = 'location';
+            break;
+          default:
+            // If no specific mapping, use the type as dimension
+            dimension = rule.type.toLowerCase().replace(/\s+/g, '_');
+        }
+        
+        if (dimension) {
+          filters.push({
+            dimension,
+            operator,
+            values
+          });
+        }
+      }
+    });
+    
+    return filters;
+  };
+
+  // Convert segments to API filter format
+  const convertSegmentsToFilters = (segments: any[]) => {
+    return segments.map((segment) => {
+      const segmentFilters = segment.rules ? convertRulesToFilters(segment.rules) : [];
+      
+      return {
+        name: segment.name || `segment_${segment.id}`,
+        type: segment.type === 'exclude' ? 'exclude' : 'include',
+        filters: {
+          type: 'and',
+          filters: segmentFilters
+        }
+      };
+    });
+  };
 
   const calculateAudienceSize = async () => {
     setIsCalculating(true);
-    // Simulate API call for audience sizing
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    const baseSize = 100000;
-    const rulesReduction = rules.length * 0.3;
-    const segmentsImpact = segments.reduce((acc, segment) => {
-      const segmentRulesCount = segment.rules?.length || 0;
-      return acc + (segment.type === 'exclude' ? segmentRulesCount * 0.2 : segmentRulesCount * 0.1);
-    }, 0);
-    const totalReduction = rulesReduction + segmentsImpact;
-    const newSize = Math.max(1000, Math.floor(baseSize * (1 - totalReduction) + Math.random() * 20000));
-    setAudienceSize(newSize);
-    setIsCalculating(false);
+    
+    try {
+      // Convert rules and segments to API format
+      const baseFilters = convertRulesToFilters(rules);
+      const segmentFilters = convertSegmentsToFilters(segments);
+      
+      // If we have rules or segments, query the actual size
+      if (baseFilters.length > 0 || segmentFilters.length > 0) {
+        // Build the filters array for the API
+        const apiFilters: any[] = [];
+        
+        // Add universe filter if we have base rules
+        if (baseFilters.length > 0) {
+          apiFilters.push({
+            name: 'base_audience',
+            type: 'universe',
+            filters: {
+              type: 'and',
+              filters: baseFilters
+            }
+          });
+        }
+        
+        // Add segment filters
+        apiFilters.push(...segmentFilters);
+        
+        // Call the analytics API
+        const response = await audienceService.queryAnalytics({
+          measures: ['count(distinct(user_id))'],
+          filters: apiFilters,
+          limit: 25
+        });
+        
+        // Extract the audience size from the response
+        const sizeData = response?.data?.[0];
+        const audienceSize = parseInt(sizeData?.measure_1 || sizeData?.['count(distinct(user_id))'] || '0');
+        
+        setAudienceSize(audienceSize);
+      } else {
+        // No rules or segments, set size to 0
+        setAudienceSize(0);
+      }
+    } catch (error) {
+      console.error('Failed to calculate audience size:', error);
+      // Fallback to estimated calculation
+      const baseSize = 100000;
+      const rulesReduction = rules.length * 0.3;
+      const segmentsImpact = segments.reduce((acc, segment) => {
+        const segmentRulesCount = segment.rules?.length || 0;
+        return acc + (segment.type === 'exclude' ? segmentRulesCount * 0.2 : segmentRulesCount * 0.1);
+      }, 0);
+      const totalReduction = rulesReduction + segmentsImpact;
+      const newSize = Math.max(1000, Math.floor(baseSize * (1 - totalReduction) + Math.random() * 20000));
+      setAudienceSize(newSize);
+    } finally {
+      setIsCalculating(false);
+    }
   };
 
   useEffect(() => {
-    if (rules.length > 0 || segments.length > 0) {
-      calculateAudienceSize();
-    } else {
-      setAudienceSize(0);
+    // Clear any existing timer
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
     }
-  }, [rules, segments]);
+
+    // Set a new timer to calculate audience size after 500ms of inactivity
+    debounceTimerRef.current = setTimeout(() => {
+      if (rules.length > 0 || segments.length > 0 || baseAudienceId) {
+        calculateAudienceSize();
+      } else {
+        setAudienceSize(0);
+      }
+    }, 500);
+
+    // Cleanup function
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, [rules, segments, baseAudienceId]);
 
   const handleSave = () => {
     if (!name.trim()) {
@@ -64,7 +223,8 @@ const AudienceBuilder = ({ onSave, onCancel }: AudienceBuilderProps) => {
       description,
       rules,
       segments,
-      size: audienceSize
+      size: audienceSize,
+      baseAudienceId
     });
 
     toast({
@@ -129,6 +289,28 @@ const AudienceBuilder = ({ onSave, onCancel }: AudienceBuilderProps) => {
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
                   />
+                </div>
+                <div>
+                  <Label htmlFor="baseAudience">Base Audience</Label>
+                  <Select
+                    value={baseAudienceId}
+                    onValueChange={setBaseAudienceId}
+                    disabled={isLoadingAudiences}
+                  >
+                    <SelectTrigger id="baseAudience">
+                      <SelectValue placeholder={isLoadingAudiences ? "Loading audiences..." : "Select a base audience"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {availableAudiences.map((audience) => (
+                        <SelectItem key={audience.id} value={audience.id}>
+                          {audience.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-sm text-gray-600 mt-1">
+                    The audience size will be calculated based on the selected base audience
+                  </p>
                 </div>
               </CardContent>
             </Card>
